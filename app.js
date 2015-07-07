@@ -3,61 +3,73 @@ var request = require('request');
 var _ = require('underscore');
 var async = require('async');
 var exec = require('child_process').exec;
+var cluster = require('cluster');
+var numCPUs = require('os').cpus().length;
+var fs = require('fs');
+var path = require('path');
+var events = require('events');
+var redis = require("redis");
+var client = redis.createClient();
+
 
 var query = 'http://www.dcard.tw/api/forum/sex/3/';
-var postq = 'http://www.dcard.tw/api/post/all/'
+var postq = 'http://www.dcard.tw/api/post/all/';
+var searchapi = 'https://www.dcard.tw/api/search?search=%E5%9C%96&size=20&forum_alias=sex';
 // var page = 1;
+// 
 
+var engine = new events.EventEmitter();
 
-async.times(190, function(n, next){
+var getPostID = function(from) {
+	request.get(searchapi + '&from=' + from, {
+		json: true
+	}, function(err, res, body) {
+		if (body.length) {
+			ids = _.pluck(body, 'id');
+			client.sadd('postids', ids);
+			getPostID(from + 20);
+		}
+	});
+};
 
-
-	request.get('http://www.dcard.tw/api/forum/sex/'+(n+1)+'/', function(err, httpResponse, body){
-		var pics = [];
-		ids = _.pluck(JSON.parse(body), 'id');
-		async.each(ids, function(eachid, callback){
-			request.get(postq + eachid, function(err, httpResponse, body){
-				if(body){
-					var doc = JSON.parse(body)
-					var vlen = doc.version.length;
-					var vlast = doc.version[vlen - 1]
-
-					if(vlast.title.match(/圖/)){
-						var re = /(http:\/\/.+)\n/g
-						var findp = vlast.content.match(re)
-						_.each(findp, function(p){
-							//delete \n
-							p = p.substring(0, p.length - 1);
-
-							//check imgur
-							if(p.match(/imgur/)){
-								//get imgur id
-								var imgurid = p.match(/imgur\.com\/([A-Za-z0-9]+)/)[1]
-								p = 'http://i.imgur.com/'+ imgurid +'.jpg'
-
-							}
-
-							pics.push(p)
-						})	
-					}	
+var getPostImgur = function() {
+	client.spop('postids', function(err, id) {
+		if (id) {
+			request.get(postq + id, {
+				json: true
+			}, function(err, res, body) {
+				if (res.statusCode != 404) {
+					var match = body.version[0].content.match(/https?:\/\/i?\.?imgur.com\/([A-Za-z0-9]+)/g);
+					if (match && match.length) {
+						match.forEach(function(pic) {
+							var newpic = "http://i.imgur.com/" + pic.match(/https?:\/\/i?\.?imgur.com\/([A-Za-z0-9]+)/)[1] + '.jpg';
+							engine.emit('imgur', {
+								gender: body.member.gender,
+								pic: newpic
+							});
+						});
+					}
 				}
-				
-				
-				
+			});
+		} else {
+			engine.emit('nothing');
+		}
 
 
-				callback();
-			})
-		}, function(err){
-			// console.log(pics)
-			console.log('第 '+(n+1)+ '頁: '+pics.length+' 張')
-			_.each(pics, function(pic){
-				// console.log(pic)
-				
-				exec('cd image && curl -O '+pic)
-			})
-		})
-		
-	})	
+	});
+};
 
-})
+
+
+getPostID(0);
+getPostImgur();
+
+engine.on('imgur', function(data) {
+	console.log(data.gender, data.pic);
+	client.sadd('imgur', JSON.stringify(data));
+	getPostImgur();
+});
+
+engine.on('nothing', function() {
+	getPostImgur();
+});
