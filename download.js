@@ -1,6 +1,8 @@
 var request = require('request');
 var _ = require('underscore');
-var fs = require('fs');
+var fs = require('fs-extra');
+var Promise = require('bluebird');
+fs = Promise.promisifyAll(fs);
 var path = require('path');
 var events = require('events');
 var redis = require("redis");
@@ -26,5 +28,6 @@ var downloadImgur = function() {
 	});
 };
 
-
-setInterval(downloadImgur, 200);
+return fs.ensureDirAsync('./imagegirl')
+.then(fs.ensureDirAsync('./imagegay'))
+.then(setInterval(downloadImgur, 200));
